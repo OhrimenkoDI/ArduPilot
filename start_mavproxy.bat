@@ -25,11 +25,9 @@ echo Script: "%MAVPROXY%"
 echo.
 
 "%PYTHON%" "%MAVPROXY%" ^
-    --master=udpout:10.0.20.15:14555 ^
-    --out=udpout:127.0.0.1:14550 ^
-    --out=udpin:0.0.0.0:14553 ^
-    --baudrate=921600 ^
-    --aircraft=drone
+    --master=udp:0.0.0.0:14550 ^
+    --out=udp:127.0.0.1:14551 ^
+    --out=udpin:0.0.0.0:14553
 
 set "EXITCODE=%ERRORLEVEL%"
 popd

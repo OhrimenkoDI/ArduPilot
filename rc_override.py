@@ -1,55 +1,22 @@
-# меняем источник позиционирования EKF на дроне (GPS/Non-GPS) 
-# через MAVLink RC Override
-
+import select
 import socket
 import struct
+import sys
+import time
 
-# ── настройки ──────────────────────────────────────────
-DRONE_IP   = "127.0.0.1"   # ← MAVProxy на локалхосте (было 10.0.20.15)
-DRONE_PORT = 14551           # ← порт udpin MAVProxy 
-MY_IP      = "10.0.20.177"  # ваш ПК (для bind)
 
-# PWM для RC7 (option=90, EKF Pos Source):
-#   1000 = Source 1 (GPS)
-#   1500 = Source 2 (Non-GPS)
-#   2000 = Source 3
-PWM_CH7 = 1500   # ← меняйте на 1000 или 2000
-# ───────────────────────────────────────────────────────
+#DRONE_IP = "127.0.0.1"
+DRONE_IP = "10.0.20.15"
+DRONE_PORT = 14550   # MAVProxy udpin port (--out=udpin:0.0.0.0:14552)
+MY_IP = "0.0.0.0"
+MY_PORT = 0          # ephemeral port, MAVProxy replies back to us
 
-def pack_rc_override(pwm_ch7: int) -> bytes:
-    """
-    MAVLink v1, message ID=70 RC_CHANNELS_OVERRIDE
-    8 каналов, остальные = 0 (игнорируются ArduPilot)
-    """
-    # Заголовок MAVLink v1
-    # STX, LEN, SEQ, SYS_ID, COMP_ID, MSG_ID
-    payload = struct.pack('<8H',
-        0,        # ch1  — не трогаем
-        0,        # ch2
-        0,        # ch3
-        0,        # ch4
-        0,        # ch5
-        0,        # ch6
-        pwm_ch7,  # ch7  ← EKF Pos Source
-        0,        # ch8
-    )
-    # target_system=1, target_component=1 (2 байта перед каналами)
-    payload = struct.pack('<BB', 1, 1) + payload
-
-    stx     = 0xFE
-    length  = len(payload)   # 18
-    seq     = 0
-    sys_id  = 255            # GCS
-    comp_id = 0
-    msg_id  = 70             # RC_CHANNELS_OVERRIDE
-
-    header = struct.pack('BBBBBB', stx, length, seq, sys_id, comp_id, msg_id)
-    packet = header + payload
-
-    # CRC (MAVLink CRC-16/MCRF4XX + CRC_EXTRA)
-    CRC_EXTRA_RC_OVERRIDE = 124
-    crc = mavlink_crc(packet[1:], CRC_EXTRA_RC_OVERRIDE)
-    return packet + struct.pack('<H', crc)
+# 1000 = Source 1 (GPS)
+# 1500 = Source 2 (Non-GPS)
+# 2000 = Source 3
+PWM_CH6 = 2000
+PWM_CH7 = 1500
+INTERVAL = 0.02  # 20 ms
 
 
 def mavlink_crc(data: bytes, crc_extra: int) -> int:
@@ -58,38 +25,65 @@ def mavlink_crc(data: bytes, crc_extra: int) -> int:
         tmp = b ^ (crc & 0xFF)
         tmp ^= (tmp << 4) & 0xFF
         crc = ((crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
-    # добавляем CRC_EXTRA
+
     tmp = crc_extra ^ (crc & 0xFF)
     tmp ^= (tmp << 4) & 0xFF
     crc = ((crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
     return crc
 
 
-# ── отправка ───────────────────────────────────────────
-# RC Override нужно слать непрерывно — ArduPilot сбрасывает его через ~100–500 мс тишины.
-# Ctrl+C для остановки (дрон вернётся к пульту).
-import time
-import sys
+def build_rc_override_packet(seq: int, pwm_ch7: int) -> bytes:
+    # MAVLink v2: uint16 fields before uint8 (field reordering)
+    payload = struct.pack("<8H", 0, 0, 0, 0, 0, PWM_CH6, PWM_CH7, 0) + struct.pack("<BB", 1, 1)
+    header = struct.pack("BBBBBBBBBB", 0xFD, len(payload), 0, 0, seq & 0xFF, 255, 0, 70, 0, 0)
+    crc = mavlink_crc(header[1:] + payload, 124)
+    return header + payload + struct.pack("<H", crc)
 
-INTERVAL = 0.05  # 50 мс → 20 пакетов/сек
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-seq  = 0
-print(f"RC Override CH7={PWM_CH7} → {DRONE_IP}:{DRONE_PORT}  (Ctrl+C для остановки)")
-try:
-    while True:
-        # пересобираем пакет с инкрементным seq
-        payload = struct.pack('<BB', 1, 1) + struct.pack('<8H', 0, 0, 0, 0, 0, 0, PWM_CH7, 0)
-        header  = struct.pack('BBBBBB', 0xFE, len(payload), seq & 0xFF, 255, 0, 70)
-        raw     = header + payload
-        crc     = mavlink_crc(raw[1:], 124)
-        packet  = raw + struct.pack('<H', crc)
-        sock.sendto(packet, (DRONE_IP, DRONE_PORT))
-        seq += 1
-        if seq % 20 == 0:
-            print(f"  seq={seq}  CH7={PWM_CH7}", end='\r')
-        time.sleep(INTERVAL)
-except KeyboardInterrupt:
-    print("\nОстановлено.")
-finally:
-    sock.close()
+def main():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((MY_IP, MY_PORT))
+    sock.setblocking(False)
+
+    seq = 0
+    rx_count = 0
+
+    print(f"RC Override CH7={PWM_CH7} -> {DRONE_IP}:{DRONE_PORT}")
+    sample = build_rc_override_packet(0, PWM_CH7)
+    print(f"[PKT] {sample.hex(' ').upper()}")
+    print(f"      len={len(sample)}  msgid=70  sysid=255  compid=0  target_sys=1  target_comp=1")
+
+    try:
+        while True:
+            readable, _, _ = select.select([sock], [], [], 0)
+            for ready_sock in readable:
+                try:
+                    data, addr = ready_sock.recvfrom(65535)
+                    rx_count += 1
+                    print(f"[RX] #{rx_count} from {addr[0]}:{addr[1]} bytes={len(data)}")
+                except OSError:
+                    pass  # Windows ICMP port-unreachable (10054), MAVProxy not ready yet
+
+            packet = build_rc_override_packet(seq, PWM_CH7)
+            try:
+                sock.sendto(packet, (DRONE_IP, DRONE_PORT))
+            except OSError:
+                pass  # Windows ICMP port-unreachable, skip and retry
+            seq += 1
+
+            if seq % 50 == 0:
+                print(f"  tx_sent={seq}  rx={rx_count}  CH7={PWM_CH7}")
+
+            time.sleep(INTERVAL)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        sock.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except OSError as exc:
+        print(f"Socket error: {exc}", file=sys.stderr)
+        sys.exit(1)
