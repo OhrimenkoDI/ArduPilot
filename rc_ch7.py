@@ -3,9 +3,22 @@ import time
 
 from pymavlink import mavutil
 
-MAVPROXY_IP = "10.0.20.15"
-MAVPROXY_PORT = 14550  # MAVProxy: --out=udpin:0.0.0.0:14552
+# ── Выбор интерфейса ──────────────────────────────────────────────────────────
+# Установи одну из констант в True, вторую в False
 
+USE_UDP  = True    # UDP: подключение через MAVProxy (--out=udpin:0.0.0.0:14552)
+USE_UART = False   # UART: прямое подключение к полётному контроллеру по COM-порту
+
+# ── Настройки UDP ─────────────────────────────────────────────────────────────
+UDP_IP   = "10.0.20.15"
+UDP_PORT = 14550
+
+# ── Настройки UART ────────────────────────────────────────────────────────────
+# Linux: /dev/ttyUSB0  /dev/ttyUSB1  /dev/ttyAMA0  /dev/serial0
+UART_PORT = "/dev/ttyUSB0"
+UART_BAUD = 57600
+
+# ── RC каналы ─────────────────────────────────────────────────────────────────
 # CH7 values for GPS source selection (RC7_OPTION=90 in ArduPilot)
 # 1000 = Source 1 (primary GPS)
 # 1500 = Source 2
@@ -13,47 +26,57 @@ MAVPROXY_PORT = 14550  # MAVProxy: --out=udpin:0.0.0.0:14552
 PWM_CH6 = 2000
 PWM_CH7 = 1500
 
-INTERVAL = 0.02  # 50 Hz — keeps override active (RC_OVERRIDE_TIME = 3 sec default)
+INTERVAL = 0.02  # 50 Hz — держит override активным (RC_OVERRIDE_TIME = 3 сек)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def send_ch7(conn, pwm6: int, pwm7: int) -> None:
+def make_connection() -> mavutil.mavfile:
+    if USE_UDP and not USE_UART:
+        addr = f"udpout:{UDP_IP}:{UDP_PORT}"
+        print(f"UDP  -> {UDP_IP}:{UDP_PORT}")
+    elif USE_UART and not USE_UDP:
+        addr = f"{UART_PORT},{UART_BAUD}"
+        print(f"UART -> {UART_PORT}  {UART_BAUD} baud")
+    else:
+        print("Ошибка: установи ровно одну константу USE_UDP или USE_UART в True", file=sys.stderr)
+        sys.exit(1)
+
+    return mavutil.mavlink_connection(addr, force_connected=True)
+
+
+def send_override(conn, pwm6: int, pwm7: int) -> None:
     conn.mav.rc_channels_override_send(
-        1, 1,              # target_system, target_component
-        0, 0, 0, 0, 0,   # CH1-CH5: 0 = do not override
-        pwm6,              # CH6
-        pwm7,              # CH7
-        0,                 # CH8
+        1, 1,             # target_system, target_component
+        0, 0, 0, 0, 0,   # CH1-CH5: 0 = не переопределять
+        pwm6,             # CH6
+        pwm7,             # CH7
+        0,                # CH8
     )
 
 
 def main() -> None:
-    conn = mavutil.mavlink_connection(
-        f"udpout:{MAVPROXY_IP}:{MAVPROXY_PORT}",
-        force_connected=True,
-    )
-
-    print(f"Sending RC_OVERRIDE CH7={PWM_CH7} -> {MAVPROXY_IP}:{MAVPROXY_PORT}")
-    print("Ctrl+C to stop and release channel")
+    conn = make_connection()
+    print(f"RC_OVERRIDE  CH6={PWM_CH6}  CH7={PWM_CH7}")
+    print("Ctrl+C — остановить и отпустить каналы")
 
     sent = 0
     try:
         while True:
-            send_ch7(conn, PWM_CH6, PWM_CH7)
+            send_override(conn, PWM_CH6, PWM_CH7)
             sent += 1
             if sent % 50 == 0:
                 print(f"  sent={sent}  CH6={PWM_CH6}  CH7={PWM_CH7}")
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:
-        print("\nReleasing CH7 override...")
-        # Send CH7=0 several times so FC gets the release before timeout
+        print("\nОтпускаю каналы...")
         for _ in range(5):
-            send_ch7(conn, 0, 0)
+            send_override(conn, 0, 0)
             time.sleep(INTERVAL)
 
     finally:
         conn.close()
-        print("Closed.")
+        print("Закрыто.")
 
 
 if __name__ == "__main__":
