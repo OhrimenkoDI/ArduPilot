@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\\\Users\\\\OkhrimenkoDI\\\\YandexDisk\\\\2026-ODI\\\\2026-Python\\\\ArduPilot\")"
+    ]
+  }
+}
