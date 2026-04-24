@@ -14,9 +14,10 @@ UDP_IP   = "10.0.20.15"
 UDP_PORT = 14550
 
 # ── Настройки UART ────────────────────────────────────────────────────────────
-# Linux: /dev/ttyUSB0  /dev/ttyUSB1  /dev/ttyAMA0  /dev/serial0
-UART_PORT = "/dev/ttyUSB0"
-UART_BAUD = 57600
+# Orange Pi 5 Ultra: UART3_M1 → /dev/ttyS3  (pins 8=TX, 10=RX)
+# USB-UART адаптер:  /dev/ttyUSB0
+UART_PORT = "/dev/ttyS3"
+UART_BAUD = 921600
 
 # ── RC каналы ─────────────────────────────────────────────────────────────────
 # CH7 values for GPS source selection (RC7_OPTION=90 in ArduPilot)
