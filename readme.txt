@@ -8,9 +8,15 @@ python -m venv myenv
 pip install mavproxy
 python -m pip install prompt_toolkit
 python -m pip install wxPython
+pip install pymavlink
+
 
 ///////////////////////////////////////
 На Orange:
+
+pip install pymavlink
+
+
 Включение UART3 (Orange Pi OS / Armbian)
 
 sudo nano /boot/orangepiEnv.txt
