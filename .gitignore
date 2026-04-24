@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# MAVLink logs
+*.tlog
+*.tlog.raw
+*.log
+*.bin
+
+# MAVProxy state
+mav.parm
+
+# IDE
+.vscode/
+.idea/
